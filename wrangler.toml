@@ -1,34 +1,27 @@
-(cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF'
-diff --git a/wrangler.toml b/wrangler.toml
---- a/wrangler.toml
-+++ b/wrangler.toml
-@@ -0,0 +1,27 @@
-+name = "tgstate"
-+main = "src/worker.js"
-+compatibility_date = "2023-10-30"
-+compatibility_flags = ["nodejs_compat"]
-+
-+[env.production]
-+name = "tgstate-prod"
-+
-+[vars]
-+# 这些变量可以在 Cloudflare Dashboard 中设置，或通过 GitHub Actions 设置
-+# TOKEN = "your-telegram-bot-token"
-+# TARGET = "your-telegram-target"
-+# PASS = "your-access-password"
-+# MODE = "p"
-+# URL = "your-custom-domain"
-+
-+# KV 存储绑定（可选，用于缓存）
-+# [[kv_namespaces]]
-+# binding = "CACHE"
-+# id = "your-kv-namespace-id"
-+# preview_id = "your-preview-kv-namespace-id"
-+
-+# 如果需要 D1 数据库（可选）
-+# [[d1_databases]]
-+# binding = "DB"
-+# database_name = "tgstate-db"
-+# database_id = "your-database-id"
-EOF
-)
+name = "tgstate"
+main = "src/worker.js"
+compatibility_date = "2023-10-30"
+compatibility_flags = ["nodejs_compat"]
+
+[env.production]
+name = "tgstate-prod"
+
+[vars]
+# 这些变量可以在 Cloudflare Dashboard 中设置，或通过 GitHub Actions 设置
+# TOKEN = "your-telegram-bot-token"
+# TARGET = "your-telegram-target"
+# PASS = "your-access-password"
+# MODE = "p"
+# URL = "your-custom-domain"
+
+# KV 存储绑定（可选，用于缓存）
+# [[kv_namespaces]]
+# binding = "CACHE"
+# id = "your-kv-namespace-id"
+# preview_id = "your-preview-kv-namespace-id"
+
+# 如果需要 D1 数据库（可选）
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "tgstate-db"
+# database_id = "your-database-id"
