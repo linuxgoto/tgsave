@@ -1,0 +1,198 @@
+name: 🔄 Continuous Integration
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  schedule:
+    # 每天 UTC 2:00 运行 (北京时间 10:00)
+    - cron: '0 2 * * *'
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  # 代码质量检查
+  lint-and-format:
+    name: 🧹 Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🧹 Run ESLint
+        run: npm run lint
+
+      - name: 🎨 Check Prettier formatting
+        run: npm run format -- --check
+
+      - name: 📏 Check TypeScript
+        run: npm run type-check
+
+  # 测试
+  test:
+    name: 🧪 Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20]
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🧪 Run tests
+        run: npm test -- --coverage
+
+      - name: 📊 Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        if: matrix.node-version == 18
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: ./coverage/lcov.info
+          fail_ci_if_error: false
+
+  # 依赖检查
+  dependency-review:
+    name: 🔍 Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Dependency Review
+        uses: actions/dependency-review-action@v3
+        with:
+          fail-on-severity: moderate
+
+  # 安全扫描
+  security-scan:
+    name: 🛡️ Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔍 Run npm audit
+        run: npm audit --audit-level=moderate
+
+      - name: 🔐 Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: javascript
+
+      - name: 🔐 Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+
+  # 构建验证
+  build-check:
+    name: 🏗️ Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🏗️ Build project
+        run: npm run build --if-present
+
+      - name: 📋 Validate wrangler.toml
+        run: npx wrangler validate
+
+  # 性能测试
+  performance-test:
+    name: ⚡ Performance Test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: ⚡ Run performance tests
+        run: |
+          # 这里可以添加性能测试脚本
+          echo "Performance tests would run here"
+          # 例如: npm run test:performance
+
+  # 通知结果
+  notify-results:
+    name: 📢 Notify Results
+    runs-on: ubuntu-latest
+    needs: [lint-and-format, test, security-scan, build-check]
+    if: always()
+    steps:
+      - name: 📊 Check job results
+        run: |
+          echo "Lint & Format: ${{ needs.lint-and-format.result }}"
+          echo "Test: ${{ needs.test.result }}"
+          echo "Security Scan: ${{ needs.security-scan.result }}"
+          echo "Build Check: ${{ needs.build-check.result }}"
+
+      - name: 📢 Update commit status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const results = {
+              'lint-and-format': '${{ needs.lint-and-format.result }}',
+              'test': '${{ needs.test.result }}',
+              'security-scan': '${{ needs.security-scan.result }}',
+              'build-check': '${{ needs.build-check.result }}'
+            };
+            
+            const allPassed = Object.values(results).every(result => result === 'success');
+            const state = allPassed ? 'success' : 'failure';
+            const description = allPassed ? 'All CI checks passed' : 'Some CI checks failed';
+            
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: state,
+              description: description,
+              context: 'ci/quality-checks'
+            });

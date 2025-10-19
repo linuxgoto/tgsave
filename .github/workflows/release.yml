@@ -1,0 +1,246 @@
+name: 🏷️ Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  # 创建 Release
+  create-release:
+    name: 🎉 Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      release-id: ${{ steps.create-release.outputs.id }}
+      upload-url: ${{ steps.create-release.outputs.upload_url }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📋 Generate changelog
+        id: changelog
+        run: |
+          # 获取最新的两个标签之间的提交
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+          
+          if [ -z "$PREVIOUS_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges ${PREVIOUS_TAG}..HEAD)
+          fi
+          
+          # 创建 changelog
+          cat > RELEASE_NOTES.md << EOF
+          ## 🚀 What's Changed
+          
+          ${COMMITS}
+          
+          ## 📦 Deployment
+          
+          This release has been automatically deployed to production.
+          
+          ## 🔗 Links
+          
+          - 📱 Production URL: \${{ vars.CUSTOM_DOMAIN || 'https://tgstate-prod.workers.dev' }}
+          - 🏥 Health Check: \${{ vars.CUSTOM_DOMAIN || 'https://tgstate-prod.workers.dev' }}/health
+          - 📊 Monitoring: [Cloudflare Dashboard](https://dash.cloudflare.com/)
+          
+          ## 🛠️ Technical Details
+          
+          - **Node.js Version**: ${{ env.NODE_VERSION }}
+          - **Cloudflare Workers Runtime**: Latest
+          - **Deployment Time**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          EOF
+
+      - name: 🎉 Create GitHub Release
+        id: create-release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+
+  # 部署到生产环境
+  deploy-production:
+    name: 🌟 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: create-release
+    environment:
+      name: production
+      url: ${{ vars.CUSTOM_DOMAIN || format('https://tgstate-prod.{0}.workers.dev', secrets.CLOUDFLARE_ACCOUNT_ID) }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🧪 Run tests
+        run: npm test
+
+      - name: 🏗️ Build project
+        run: npm run build --if-present
+
+      - name: ⚙️ Create production wrangler.toml
+        run: |
+          cat > wrangler.toml << EOF
+          name = "tgstate-prod"
+          main = "src/worker.js"
+          compatibility_date = "2024-01-01"
+          compatibility_flags = ["nodejs_compat"]
+
+          [vars]
+          TOKEN = "${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          TARGET = "${{ secrets.TELEGRAM_TARGET }}"
+          PASS = "${{ secrets.ACCESS_PASSWORD }}"
+          MODE = "${{ vars.RUN_MODE || 'p' }}"
+          URL = "${{ vars.CUSTOM_DOMAIN }}"
+          VERSION = "${{ github.ref_name }}"
+
+          [[kv_namespaces]]
+          binding = "CACHE"
+          id = "${{ secrets.KV_NAMESPACE_ID }}"
+          preview_id = "${{ secrets.KV_NAMESPACE_PREVIEW_ID }}"
+          EOF
+
+      - name: 🚀 Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      - name: 🏥 Health Check
+        run: |
+          echo "Performing post-deployment health check..."
+          sleep 15
+          
+          HEALTH_URL="${{ vars.CUSTOM_DOMAIN || format('https://tgstate-prod.{0}.workers.dev', secrets.CLOUDFLARE_ACCOUNT_ID) }}/health"
+          
+          for i in {1..10}; do
+            if curl -f -s "$HEALTH_URL" | jq -e '.success == true'; then
+              echo "✅ Health check passed!"
+              break
+            else
+              echo "⏳ Health check failed, retrying in 10 seconds... ($i/10)"
+              sleep 10
+              if [ $i -eq 10 ]; then
+                echo "❌ Health check failed after 10 attempts"
+                exit 1
+              fi
+            fi
+          done
+
+      - name: 📊 Update release with deployment info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const releaseId = '${{ needs.create-release.outputs.release-id }}';
+            const deploymentUrl = '${{ vars.CUSTOM_DOMAIN }}' || 'https://tgstate-prod.${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.workers.dev';
+            
+            // 更新 release 描述
+            const { data: release } = await github.rest.repos.getRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId
+            });
+            
+            const updatedBody = release.body + `\n\n## ✅ Deployment Status\n\n- **Status**: Successfully deployed\n- **URL**: ${deploymentUrl}\n- **Deployed at**: ${new Date().toISOString()}`;
+            
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              body: updatedBody
+            });
+
+  # 通知部署结果
+  notify-deployment:
+    name: 📢 Notify Deployment
+    runs-on: ubuntu-latest
+    needs: [create-release, deploy-production]
+    if: always()
+    steps:
+      - name: 📧 Send success notification
+        if: needs.deploy-production.result == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deploymentUrl = '${{ vars.CUSTOM_DOMAIN }}' || 'https://tgstate-prod.${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.workers.dev';
+            
+            // 发送 Slack 通知 (如果配置了)
+            if ('${{ secrets.SLACK_WEBHOOK_URL }}') {
+              await fetch('${{ secrets.SLACK_WEBHOOK_URL }}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  text: `🎉 Release ${{ github.ref_name }} deployed successfully!`,
+                  attachments: [{
+                    color: 'good',
+                    fields: [{
+                      title: 'Version',
+                      value: '${{ github.ref_name }}',
+                      short: true
+                    }, {
+                      title: 'Environment',
+                      value: 'Production',
+                      short: true
+                    }, {
+                      title: 'URL',
+                      value: deploymentUrl,
+                      short: false
+                    }]
+                  }]
+                })
+              });
+            }
+
+      - name: 📧 Send failure notification
+        if: needs.deploy-production.result == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // 发送失败通知
+            if ('${{ secrets.SLACK_WEBHOOK_URL }}') {
+              await fetch('${{ secrets.SLACK_WEBHOOK_URL }}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  text: `🚨 Release ${{ github.ref_name }} deployment failed!`,
+                  attachments: [{
+                    color: 'danger',
+                    fields: [{
+                      title: 'Version',
+                      value: '${{ github.ref_name }}',
+                      short: true
+                    }, {
+                      title: 'Environment',
+                      value: 'Production',
+                      short: true
+                    }]
+                  }]
+                })
+              });
+            }
