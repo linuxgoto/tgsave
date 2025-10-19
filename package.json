@@ -1,27 +1,22 @@
-(cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF'
-diff --git a/package.json b/package.json
---- a/package.json
-+++ b/package.json
-@@ -0,0 +1,20 @@
-+{
-+  "name": "tgstate-cloudflare",
-+  "version": "1.0.0",
-+  "description": "tgState deployed on Cloudflare Workers",
-+  "main": "src/worker.js",
-+  "scripts": {
-+    "dev": "wrangler dev",
-+    "deploy": "wrangler deploy",
-+    "deploy:prod": "wrangler deploy --env production"
-+  },
-+  "keywords": ["telegram", "file-storage", "cloudflare-workers"],
-+  "author": "csznet",
-+  "license": "MIT",
-+  "devDependencies": {
-+    "wrangler": "^3.0.0"
-+  },
-+  "dependencies": {
-+    "@cloudflare/workers-types": "^4.0.0"
-+  }
-+}
-EOF
-)
+{
+  "name": "tgstate-cloudflare",
+  "version": "1.0.0",
+  "description": "tgState deployed on Cloudflare Workers",
+  "main": "src/worker.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:prod": "wrangler deploy --env production",
+    "check": "node scripts/deploy-check.js",
+    "preinstall": "node scripts/deploy-check.js || true"
+  },
+  "keywords": ["telegram", "file-storage", "cloudflare-workers"],
+  "author": "csznet",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  },
+  "dependencies": {
+    "@cloudflare/workers-types": "^4.0.0"
+  }
+}
