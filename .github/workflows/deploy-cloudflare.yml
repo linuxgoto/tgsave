@@ -1,0 +1,86 @@
+(cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF'
+diff --git a/.github/workflows/deploy-cloudflare.yml b/.github/workflows/deploy-cloudflare.yml
+--- a/.github/workflows/deploy-cloudflare.yml
++++ b/.github/workflows/deploy-cloudflare.yml
+@@ -0,0 +1,79 @@
++name: Deploy to Cloudflare Workers
++
++on:
++  push:
++    branches: [ main, master ]
++  pull_request:
++    branches: [ main, master ]
++  workflow_dispatch:
++
++jobs:
++  deploy:
++    runs-on: ubuntu-latest
++    name: Deploy to Cloudflare Workers
++    
++    steps:
++    - name: Checkout
++      uses: actions/checkout@v4
++
++    - name: Setup Node.js
++      uses: actions/setup-node@v4
++      with:
++        node-version: '18'
++        cache: 'npm'
++
++    - name: Install dependencies
++      run: npm install
++
++    - name: Create wrangler.toml with secrets
++      run: |
++        cat > wrangler.toml << EOF
++        name = "tgstate"
++        main = "src/worker.js"
++        compatibility_date = "2023-10-30"
++        compatibility_flags = ["nodejs_compat"]
++
++        [env.production]
++        name = "tgstate-prod"
++
++        [vars]
++        TOKEN = "${{ secrets.TELEGRAM_BOT_TOKEN }}"
++        TARGET = "${{ secrets.TELEGRAM_TARGET }}"
++        PASS = "${{ secrets.ACCESS_PASSWORD }}"
++        MODE = "${{ vars.RUN_MODE || 'p' }}"
++        URL = "${{ vars.CUSTOM_DOMAIN }}"
++        EOF
++
++    - name: Deploy to Cloudflare Workers (Development)
++      if: github.event_name == 'pull_request'
++      uses: cloudflare/wrangler-action@v3
++      with:
++        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
++        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
++        command: deploy
++
++    - name: Deploy to Cloudflare Workers (Production)
++      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
++      uses: cloudflare/wrangler-action@v3
++      with:
++        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
++        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
++        command: deploy --env production
++
++    - name: Create KV namespace (if not exists)
++      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
++      run: |
++        # 检查 KV namespace 是否存在，如果不存在则创建
++        npx wrangler kv:namespace create "CACHE" --preview || echo "KV namespace may already exist"
++        npx wrangler kv:namespace create "CACHE" || echo "KV namespace may already exist"
++      env:
++        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
++        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
++
++    - name: Output deployment info
++      run: |
++        echo "🚀 Deployment completed!"
++        echo "📝 Please update your custom domain in Cloudflare Dashboard if needed"
++        echo "🔧 Environment variables can be managed in:"
++        echo "   - GitHub Repository Settings > Secrets and variables > Actions"
++        echo "   - Cloudflare Dashboard > Workers & Pages > tgstate > Settings > Environment variables"
+EOF
+)
